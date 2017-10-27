@@ -5,14 +5,13 @@ import (
 	"crypto/hmac"
 	"crypto/sha512"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io/ioutil"
 	"net/http"
 	"strconv"
 	"time"
-
-	"github.com/davecgh/go-spew/spew"
 )
 
 func getAndRead(URL string) ([]byte, error) {
@@ -59,7 +58,39 @@ func (c Client) signAndGet(URI string) ([]byte, error) {
 	return c.signAnd(URI, nil, "GET")
 }
 
-func (c Client) signAnd(URI string, i interface{}, do string) ([]byte, error) {
+func (c Client) sign(irr IndependentReserveRequest) (string, error) {
+	f, err := irr.SignFormat()
+	if err != nil {
+		return "", err
+	}
+	return c.hashEncode(f)
+}
+
+func (c Client) hashEncode(message string) (string, error) {
+	mac := hmac.New(sha512.New, []byte(c.private))
+	mac.Write([]byte(message))
+
+	data, err := hex.DecodeString(string(mac.Sum(nil)))
+	if err != nil {
+		return "", err
+	}
+	//1mac.Sum(nil)
+	//data := base64.StdEncoding.EncodeToString(mac.Sum(nil))
+	return string(data), nil
+}
+
+func (c Client) setupHeaders(req *http.Request) {
+	req.Header.Set("Content-Type", "application/json")
+}
+
+func (c Client) signAndPost(i IndependentReserveRequest) ([]byte, error) {
+	return c.signAnd(i, "POST")
+}
+func (c Client) signAndGet(i IndependentReserveRequest) ([]byte, error) {
+	return c.signAnd(i, "GET")
+}
+
+func (c Client) signAnd(i IndependentReserveRequest, do string) ([]byte, error) {
 	var body []byte
 	var err error
 	if i != nil {
@@ -70,15 +101,19 @@ func (c Client) signAnd(URI string, i interface{}, do string) ([]byte, error) {
 	} else {
 		body = []byte("")
 	}
-	spew.Dump(i)
+
+	//spew.Dump(i)
 	client := http.Client{}
-	now, signature := c.sign(URI, string(body))
-	URL := c.Domain + URI
-	req, err := http.NewRequest(do, URL, bytes.NewReader(body))
+	signature, err := c.sign(i)
+	if err != nil {
+		return body, err
+	}
+	i.SetSignature(signature)
+	req, err := http.NewRequest(do, i.GetURL(), bytes.NewReader(body))
 	if err != nil {
 		return nil, errors.New("Error creating new Request;" + err.Error())
 	}
-	c.setupHeaders(req, now, signature)
+	c.setupHeaders(req)
 	response, err := client.Do(req)
 	if err != nil {
 		return nil, errors.New("Error doing request;" + err.Error())
